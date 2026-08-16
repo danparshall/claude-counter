@@ -83,20 +83,17 @@ describe('trunk reconstruction', () => {
 		expect(m.totalTokens).toBe(0);
 	});
 
-	// UPSTREAM BUG: buildTrunk has no cycle guard / visited set. A parent
-	// chain A -> B -> A never reaches ROOT and never breaks, so the
-	// synchronous walk loops forever. The probe runs in a child process
-	// (killed after 2s) because a busy sync loop can't be interrupted by an
-	// in-process timeout. This test characterizes the buggy behavior
-	// directly: it fails loudly if the harness breaks AND when the bug is
-	// fixed (a one-line visited-set fix). When fixing the bug, flip these
-	// assertions to expect DONE and a clean exit.
-	it('UPSTREAM BUG: hangs on a cyclic parent chain (probe killed by timeout)', () => {
+	// Regression guard: buildTrunk originally had no cycle guard, so a
+	// parent chain A -> B -> A looped forever (found by probing; fixed with
+	// a visited set). The probe still runs in a child process killed after
+	// 2s, because a regression would reintroduce a busy synchronous loop
+	// that no in-process timeout can interrupt.
+	it('terminates when the parent chain contains a cycle', () => {
 		const probe = fileURLToPath(new URL('./helpers/cycle-probe.cjs', import.meta.url));
 		const res = spawnSync(process.execPath, [probe], { timeout: 2000, encoding: 'utf8' });
 		expect(res.stderr).not.toMatch(/Error/); // probe loaded cleanly — not a harness crash
-		expect(res.stdout).not.toContain('DONE'); // the walk never terminated
-		expect(res.signal).toBe('SIGTERM'); // killed by spawnSync's timeout
+		expect(res.stdout).toContain('DONE');
+		expect(res.status).toBe(0);
 	}, 10000);
 });
 
