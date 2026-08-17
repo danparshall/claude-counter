@@ -12,4 +12,4 @@ Branched off `add-test-suite` (2026-08-17) before that branch's PR #1 merged; re
 
 ## Sessions (newest first)
 
-- **2026-08-17** — [`20260817_web_context_estimate`](convos/20260817_web_context_estimate.md): branch created; decided to investigate data sources before designing around the tokenizer estimate.
+- **2026-08-17** — [`20260817_web_context_estimate`](convos/20260817_web_context_estimate.md): branch created; data-source investigation ([results](results/20260817_data_source_investigation.md)) found no readable context field; work split into Phase A (issue #2) and Phase B (issue #3); Phase A plan written: [`plans/20260817_phase_a_context_estimate_correctness.md`](plans/20260817_phase_a_context_estimate_correctness.md). Decisions: displayed number includes ×1.2 calibration; model-only window lookup; red fill at 85%.
