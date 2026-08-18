@@ -1,3 +1,4 @@
+<!-- Generated during: convos/20260817_web_context_estimate.md -->
 # Data-source investigation: can we READ true context usage on claude.ai web?
 
 **Provenance:** web-research subagent (nori-web-search-researcher), 2026-08-17, session `20260817_web_context_estimate`. ~45 tool calls over community reverse-engineering repos, lugia19/Claude-Usage-Extension source, and official support docs. Confidence labels inline.

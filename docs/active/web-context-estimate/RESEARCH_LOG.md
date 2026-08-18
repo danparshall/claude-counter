@@ -12,4 +12,23 @@ Branched off `add-test-suite` (2026-08-17) before that branch's PR #1 merged; re
 
 ## Sessions (newest first)
 
-- **2026-08-17** — [`20260817_web_context_estimate`](convos/20260817_web_context_estimate.md): branch created; data-source investigation ([results](results/20260817_data_source_investigation.md)) found no readable context field; work split into Phase A (issue #2) and Phase B (issue #3); Phase A plan written: [`plans/20260817_phase_a_context_estimate_correctness.md`](plans/20260817_phase_a_context_estimate_correctness.md). Decisions: displayed number includes ×1.2 calibration; model-only window lookup; red fill at 85%.
+## Session: 2026-08-17 — [`20260817_web_context_estimate`](convos/20260817_web_context_estimate.md)
+
+### Topics Explored
+- Clarified the extension's two UI surfaces (header context mini-bar vs usage bars with time marker).
+- Found the refresh-cadence gap (metrics only update on navigation, not generation end).
+- Subagent investigation: can real context data be read from claude.ai traffic?
+
+### Provisional Findings
+- No readable context field exists; estimation + calibration is the path.
+- Context windows are model-dependent (1M/500K/200K) — fixed 200K scale is wrong.
+- Web compaction threshold unpublished; its network signature is an open empirical gap.
+
+### Results
+- [`results/20260817_data_source_investigation.md`](results/20260817_data_source_investigation.md)
+
+### Next Steps
+- Next agent implements Phase A per [`plans/20260817_phase_a_context_estimate_correctness.md`](plans/20260817_phase_a_context_estimate_correctness.md) (issue #2; TDD, tests first). Rebase onto main once PR #1 merges.
+- Dan: capture a real `model` string from a conversation GET; check whether the header counter renders on current DOM.
+- Phase B (issue #3) after: SSE/compaction instrumentation.
+- Decisions locked this session: displayed number includes ×1.2; model-only window lookup; red fill at 85%.
