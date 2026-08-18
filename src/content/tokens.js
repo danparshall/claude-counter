@@ -113,6 +113,43 @@
 		return stableStringify(minimal);
 	}
 
+	// Media heuristics, already in Claude-token units (do NOT apply the text
+	// calibration factor on top — that would double-count the correction).
+	const IMAGE_PIXELS_PER_TOKEN = 750;
+	const IMAGE_TOKENS_CAP = 1600;
+	const DOCUMENT_TOKENS_PER_PAGE = 2250;
+
+	function estimateImageTokens(item) {
+		const width = Number(item?.width) || Number(item?.source?.width) || 0;
+		const height = Number(item?.height) || Number(item?.source?.height) || 0;
+		if (width > 0 && height > 0) {
+			return Math.min(IMAGE_TOKENS_CAP, Math.ceil((width * height) / IMAGE_PIXELS_PER_TOKEN));
+		}
+		// Unknown dimensions: assume the cap, so the estimate errs full.
+		return IMAGE_TOKENS_CAP;
+	}
+
+	function estimateMediaTokens(message) {
+		let tokens = 0;
+
+		const content = Array.isArray(message?.content) ? message.content : [];
+		for (const item of content) {
+			if (item?.type === 'image') tokens += estimateImageTokens(item);
+		}
+
+		// Document attachments: when extraction produced text, that text is
+		// already counted by the text path — no page heuristic on top.
+		const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+		for (const a of attachments) {
+			const hasExtracted = typeof a?.extracted_content === 'string' && a.extracted_content;
+			if (!hasExtracted && typeof a?.page_count === 'number' && a.page_count > 0) {
+				tokens += DOCUMENT_TOKENS_PER_PAGE * a.page_count;
+			}
+		}
+
+		return tokens;
+	}
+
 	function stringifyMessageCountables(message) {
 		const parts = [];
 
@@ -183,7 +220,8 @@
 		const trunkIds = trunk.map((m) => m.uuid).filter(Boolean);
 		tokenCache.pruneToMessageIds(trunkIds);
 
-		let totalTokens = 0;
+		let textTokens = 0;
+		let mediaTokens = 0;
 		let lastAssistantMs = null;
 
 		for (const msg of trunk) {
@@ -196,15 +234,23 @@
 
 			const msgText = stringifyMessageCountables(msg);
 			const msgTokens = msg?.uuid ? await tokenCache.getMessageTokens(msg.uuid, msgText) : countTokens(msgText);
-			totalTokens += msgTokens;
+			textTokens += msgTokens;
+			mediaTokens += estimateMediaTokens(msg);
 		}
 		const cachedUntil = lastAssistantMs ? lastAssistantMs + CC.CONST.CACHE_WINDOW_MS : null;
 
+		// Calibrate the trunk text sum once; media heuristics are already in
+		// Claude-token units.
+		const totalTokens = Math.ceil(textTokens * CC.CONST.TOKEN_CALIBRATION) + mediaTokens;
+
 		return {
 			trunkMessageCount: trunk.length,
+			textTokens,
+			mediaTokens,
 			totalTokens,
 			lastAssistantMs,
-			cachedUntil
+			cachedUntil,
+			model: conversation?.model ?? null
 		};
 	}
 
