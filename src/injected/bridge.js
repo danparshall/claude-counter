@@ -35,7 +35,7 @@
 
 		const contentType = response.headers.get('content-type') || '';
 		if (contentType.includes('event-stream')) {
-			handleEventStream(response);
+			handleEventStream(response, url);
 		}
 
 		// Catch conversation tree fetches
@@ -93,7 +93,11 @@
 		}
 	}
 
-	async function handleEventStream(response) {
+	function isCompletionUrl(url) {
+		return !!url && (url.includes('/completion') || url.includes('/retry_completion'));
+	}
+
+	async function handleEventStream(response, url) {
 		try {
 			const cloned = response.clone();
 			const reader = cloned.body?.getReader?.();
@@ -121,6 +125,13 @@
 						// ignore
 					}
 				}
+			}
+
+			// The completion stream ending means generation finished — tell
+			// the content script so it can refetch the conversation without
+			// waiting for navigation.
+			if (isCompletionUrl(url)) {
+				post('cc:generation_end', {});
 			}
 		} catch {
 			// best-effort; don't break claude.ai
