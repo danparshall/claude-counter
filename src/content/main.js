@@ -168,7 +168,8 @@
 		if (!data) return;
 
 		const metrics = await CC.tokens.computeConversationMetrics(data);
-		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil });
+		const contextLimit = CC.models.contextLimitForModel(metrics.model);
+		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil, contextLimit });
 	}
 
 	function handleMessageLimit(messageLimit) {
@@ -177,6 +178,7 @@
 	}
 
 	CC.bridge.on('cc:generation_start', handleGenerationStart);
+	CC.bridge.on('cc:generation_end', refreshConversation);
 	CC.bridge.on('cc:conversation', handleConversationPayload);
 	CC.bridge.on('cc:message_limit', handleMessageLimit);
 

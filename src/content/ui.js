@@ -33,6 +33,23 @@
 		return `${days}d ${remHours}h`;
 	}
 
+	function formatContextLimit(limit) {
+		if (limit >= 1000000) {
+			const millions = limit / 1000000;
+			return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+		}
+		return `${Math.round(limit / 1000)}k`;
+	}
+
+	function contextTooltipText(limit) {
+		const warnPct = Math.round(CC.CONST.CONTEXT_WARN_FRACTION * 100);
+		return (
+			`Approximate tokens, including a ×${CC.CONST.TOKEN_CALIBRATION} calibration for Claude's tokenizer (excludes system prompt).\n` +
+			`Bar scale: ${formatContextLimit(limit)} tokens — this model's maximum context.\n` +
+			`Compaction expected above ~${warnPct}% (threshold unverified).`
+		);
+	}
+
 	function setupTooltip(element, tooltip, { topOffset = 10 } = {}) {
 		if (!element || !tooltip) return;
 		if (element.hasAttribute('data-tooltip-setup')) return;
@@ -153,7 +170,7 @@
 				bar.style.setProperty('--cc-marker', markerColor);
 			};
 
-			applyBarChrome(this.lengthBar, { fillWarn: fillColor });
+			applyBarChrome(this.lengthBar, { fillWarn: CC.COLORS.RED_WARNING });
 			applyBarChrome(this.sessionBar, { fillWarn: CC.COLORS.RED_WARNING });
 			applyBarChrome(this.weeklyBar, { fillWarn: CC.COLORS.RED_WARNING });
 		}
@@ -276,9 +293,7 @@
 		}
 
 		_setupTooltips() {
-			this.lengthTooltip = makeTooltip(
-				"Approximate tokens (excludes system prompt).\nUses a generic tokenizer, may differ from Claude's count.\nBecomes invalid after context compaction.\nBar scale: 200k tokens (Claude's maximum context length, will compact before then)."
-			);
+			this.lengthTooltip = makeTooltip(contextTooltipText(CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS));
 			setupTooltip(
 				this.lengthGroup,
 				this.lengthTooltip,
@@ -367,7 +382,7 @@
 			}
 		}
 
-		setConversationMetrics({ totalTokens, cachedUntil } = {}) {
+		setConversationMetrics({ totalTokens, cachedUntil, contextLimit } = {}) {
 			this.pendingCache = false;
 
 			if (typeof totalTokens !== 'number') {
@@ -378,7 +393,9 @@
 				return;
 			}
 
-			const pct = Math.max(0, Math.min(100, (totalTokens / CC.CONST.CONTEXT_LIMIT_TOKENS) * 100));
+			const limit =
+				typeof contextLimit === 'number' && contextLimit > 0 ? contextLimit : CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS;
+			const pct = Math.max(0, Math.min(100, (totalTokens / limit) * 100));
 			this.lengthDisplay.textContent = `~${totalTokens.toLocaleString()} tokens`;
 
 			// Mini bar (hide when full - context is definitely compacted by then)
@@ -399,8 +416,12 @@
 				const fill = document.createElement('div');
 				fill.className = 'cc-bar__fill';
 				fill.style.width = `${pct}%`;
+				fill.classList.toggle('cc-warn', totalTokens / limit >= CC.CONST.CONTEXT_WARN_FRACTION);
 				bar.appendChild(fill);
 				this.refreshProgressChrome();
+				if (this.lengthTooltip) {
+					this.lengthTooltip.textContent = contextTooltipText(limit);
+				}
 
 				const barContainer = document.createElement('span');
 				barContainer.className = 'inline-flex items-center';
