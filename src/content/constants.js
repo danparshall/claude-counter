@@ -12,7 +12,15 @@
 
 	CC.CONST = Object.freeze({
 		CACHE_WINDOW_MS: 5 * 60 * 1000,
-		CONTEXT_LIMIT_TOKENS: 200000
+		// Window size when the model is unknown. Conservative on purpose:
+		// overstates fullness, so the warning fires early rather than late.
+		DEFAULT_CONTEXT_LIMIT_TOKENS: 200000,
+		// Compaction expected somewhere above this fraction (unverified;
+		// Phase B instrumentation will pin it down).
+		CONTEXT_WARN_FRACTION: 0.85,
+		// o200k undercounts Claude's tokenizer; ~1.2 is lugia19 folklore plus
+		// Claude Code analogues, pending Phase B calibration data.
+		TOKEN_CALIBRATION: 1.2
 	});
 
 	CC.COLORS = Object.freeze({
