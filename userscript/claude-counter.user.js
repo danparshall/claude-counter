@@ -18,6 +18,7 @@
 
 	CC._ccInternal = CC._ccInternal || {};
 	CC._ccInternal.onGenerationStart = CC._ccInternal.onGenerationStart || (() => {});
+	CC._ccInternal.onGenerationEnd = CC._ccInternal.onGenerationEnd || (() => {});
 	CC._ccInternal.onConversationData = CC._ccInternal.onConversationData || (() => {});
 	CC._ccInternal.onMessageLimit = CC._ccInternal.onMessageLimit || (() => {});
 	CC._ccInternal.onUrlChange = CC._ccInternal.onUrlChange || (() => {});
@@ -67,7 +68,7 @@
 			const response = await originalFetch(...args);
 			const contentType = response.headers.get('content-type') || '';
 			if (contentType.includes('event-stream')) {
-				handleEventStream(response);
+				handleEventStream(response, url);
 			}
 
 			if (url && url.includes('/chat_conversations/') && url.includes('tree=')) {
@@ -106,7 +107,11 @@
 		}
 	}
 
-	async function handleEventStream(response) {
+	function isCompletionUrl(url) {
+		return !!url && (url.includes('/completion') || url.includes('/retry_completion'));
+	}
+
+	async function handleEventStream(response, url) {
 		try {
 			const cloned = response.clone();
 			const reader = cloned.body?.getReader?.();
@@ -135,6 +140,16 @@
 					}
 				}
 			}
+
+			// The completion stream ending means generation finished — refresh
+			// the conversation without waiting for navigation.
+			if (isCompletionUrl(url)) {
+				try {
+					CC._ccInternal.onGenerationEnd();
+				} catch {
+					// ignore
+				}
+			}
 		} catch {
 			// best-effort; do not break claude.ai
 		}
@@ -155,7 +170,15 @@
 
 	CC.CONST = Object.freeze({
 		CACHE_WINDOW_MS: 5 * 60 * 1000,
-		CONTEXT_LIMIT_TOKENS: 200000
+		// Window size when the model is unknown. Conservative on purpose:
+		// overstates fullness, so the warning fires early rather than late.
+		DEFAULT_CONTEXT_LIMIT_TOKENS: 200000,
+		// Compaction expected somewhere above this fraction (unverified;
+		// Phase B instrumentation will pin it down).
+		CONTEXT_WARN_FRACTION: 0.85,
+		// o200k undercounts Claude's tokenizer; ~1.2 is lugia19 folklore plus
+		// Claude Code analogues, pending Phase B calibration data.
+		TOKEN_CALIBRATION: 1.2
 	});
 
 	CC.COLORS = Object.freeze({
@@ -169,6 +192,34 @@
 		BOLD_LIGHT: '#141413',
 		BOLD_DARK: '#faf9f5'
 	});
+})();
+
+// --- models (mirrors src/content/models.js) ---
+(() => {
+	'use strict';
+
+	const CC = (globalThis.ClaudeCounter = globalThis.ClaudeCounter || {});
+
+	// Model family -> context window. Ordered most-specific-first; first match
+	// wins. Substring matching so version/date suffixes don't break the
+	// lookup. Family strings are PROVISIONAL until real claude.ai model ids
+	// are captured; unknown models fall back to the conservative 200K default.
+	const WINDOW_PATTERNS = [
+		{ pattern: 'opus-5', limit: 1000000 },
+		{ pattern: 'sonnet-5', limit: 1000000 },
+		{ pattern: 'opus-4', limit: 500000 },
+		{ pattern: 'sonnet-4', limit: 500000 }
+	];
+
+	function contextLimitForModel(model) {
+		if (typeof model !== 'string' || !model) return CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS;
+		for (const { pattern, limit } of WINDOW_PATTERNS) {
+			if (model.includes(pattern)) return limit;
+		}
+		return CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS;
+	}
+
+	CC.models = { contextLimitForModel };
 })();
 
 
@@ -286,6 +337,43 @@
 		return stableStringify(minimal);
 	}
 
+	// Media heuristics, already in Claude-token units (do NOT apply the text
+	// calibration factor on top — that would double-count the correction).
+	const IMAGE_PIXELS_PER_TOKEN = 750;
+	const IMAGE_TOKENS_CAP = 1600;
+	const DOCUMENT_TOKENS_PER_PAGE = 2250;
+
+	function estimateImageTokens(item) {
+		const width = Number(item?.width) || Number(item?.source?.width) || 0;
+		const height = Number(item?.height) || Number(item?.source?.height) || 0;
+		if (width > 0 && height > 0) {
+			return Math.min(IMAGE_TOKENS_CAP, Math.ceil((width * height) / IMAGE_PIXELS_PER_TOKEN));
+		}
+		// Unknown dimensions: assume the cap, so the estimate errs full.
+		return IMAGE_TOKENS_CAP;
+	}
+
+	function estimateMediaTokens(message) {
+		let tokens = 0;
+
+		const content = Array.isArray(message?.content) ? message.content : [];
+		for (const item of content) {
+			if (item?.type === 'image') tokens += estimateImageTokens(item);
+		}
+
+		// Document attachments: when extraction produced text, that text is
+		// already counted by the text path — no page heuristic on top.
+		const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+		for (const a of attachments) {
+			const hasExtracted = typeof a?.extracted_content === 'string' && a.extracted_content;
+			if (!hasExtracted && typeof a?.page_count === 'number' && a.page_count > 0) {
+				tokens += DOCUMENT_TOKENS_PER_PAGE * a.page_count;
+			}
+		}
+
+		return tokens;
+	}
+
 	function stringifyMessageCountables(message) {
 		const parts = [];
 
@@ -358,7 +446,8 @@
 		const trunkIds = trunk.map((m) => m.uuid).filter(Boolean);
 		tokenCache.pruneToMessageIds(trunkIds);
 
-		let totalTokens = 0;
+		let textTokens = 0;
+		let mediaTokens = 0;
 		let lastAssistantMs = null;
 
 		for (const msg of trunk) {
@@ -371,15 +460,23 @@
 
 			const msgText = stringifyMessageCountables(msg);
 			const msgTokens = msg?.uuid ? await tokenCache.getMessageTokens(msg.uuid, msgText) : countTokens(msgText);
-			totalTokens += msgTokens;
+			textTokens += msgTokens;
+			mediaTokens += estimateMediaTokens(msg);
 		}
 		const cachedUntil = lastAssistantMs ? lastAssistantMs + CC.CONST.CACHE_WINDOW_MS : null;
 
+		// Calibrate the trunk text sum once; media heuristics are already in
+		// Claude-token units.
+		const totalTokens = Math.ceil(textTokens * CC.CONST.TOKEN_CALIBRATION) + mediaTokens;
+
 		return {
 			trunkMessageCount: trunk.length,
+			textTokens,
+			mediaTokens,
 			totalTokens,
 			lastAssistantMs,
-			cachedUntil
+			cachedUntil,
+			model: conversation?.model ?? null
 		};
 	}
 
@@ -420,6 +517,23 @@
 		const days = Math.floor(hours / 24);
 		const remHours = hours % 24;
 		return `${days}d ${remHours}h`;
+	}
+
+	function formatContextLimit(limit) {
+		if (limit >= 1000000) {
+			const millions = limit / 1000000;
+			return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+		}
+		return `${Math.round(limit / 1000)}k`;
+	}
+
+	function contextTooltipText(limit) {
+		const warnPct = Math.round(CC.CONST.CONTEXT_WARN_FRACTION * 100);
+		return (
+			`Approximate tokens, including a ×${CC.CONST.TOKEN_CALIBRATION} calibration for Claude's tokenizer (excludes system prompt).\n` +
+			`Bar scale: ${formatContextLimit(limit)} tokens — this model's maximum context.\n` +
+			`Compaction expected above ~${warnPct}% (threshold unverified).`
+		);
 	}
 
 	function setupTooltip(element, tooltip, { topOffset = 10 } = {}) {
@@ -542,7 +656,7 @@
 				bar.style.setProperty('--cc-marker', markerColor);
 			};
 
-			applyBarChrome(this.lengthBar, { fillWarn: fillColor });
+			applyBarChrome(this.lengthBar, { fillWarn: CC.COLORS.RED_WARNING });
 			applyBarChrome(this.sessionBar, { fillWarn: CC.COLORS.RED_WARNING });
 			applyBarChrome(this.weeklyBar, { fillWarn: CC.COLORS.RED_WARNING });
 		}
@@ -665,9 +779,7 @@
 		}
 
 		_setupTooltips() {
-			this.lengthTooltip = makeTooltip(
-				"Approximate tokens (excludes system prompt).\nUses a generic tokenizer, may differ from Claude's count.\nBecomes invalid after context compaction.\nBar scale: 200k tokens (Claude's maximum context length, will compact before then)."
-			);
+			this.lengthTooltip = makeTooltip(contextTooltipText(CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS));
 			setupTooltip(
 				this.lengthGroup,
 				this.lengthTooltip,
@@ -756,7 +868,7 @@
 			}
 		}
 
-		setConversationMetrics({ totalTokens, cachedUntil } = {}) {
+		setConversationMetrics({ totalTokens, cachedUntil, contextLimit } = {}) {
 			this.pendingCache = false;
 
 			if (typeof totalTokens !== 'number') {
@@ -767,7 +879,9 @@
 				return;
 			}
 
-			const pct = Math.max(0, Math.min(100, (totalTokens / CC.CONST.CONTEXT_LIMIT_TOKENS) * 100));
+			const limit =
+				typeof contextLimit === 'number' && contextLimit > 0 ? contextLimit : CC.CONST.DEFAULT_CONTEXT_LIMIT_TOKENS;
+			const pct = Math.max(0, Math.min(100, (totalTokens / limit) * 100));
 			this.lengthDisplay.textContent = `~${totalTokens.toLocaleString()} tokens`;
 
 			// Mini bar (hide when full - context is definitely compacted by then)
@@ -788,8 +902,12 @@
 				const fill = document.createElement('div');
 				fill.className = 'cc-bar__fill';
 				fill.style.width = `${pct}%`;
+				fill.classList.toggle('cc-warn', totalTokens / limit >= CC.CONST.CONTEXT_WARN_FRACTION);
 				bar.appendChild(fill);
 				this.refreshProgressChrome();
+				if (this.lengthTooltip) {
+					this.lengthTooltip.textContent = contextTooltipText(limit);
+				}
 
 				const barContainer = document.createElement('span');
 				barContainer.className = 'inline-flex items-center';
@@ -1175,7 +1293,8 @@
 		if (!data) return;
 
 		const metrics = await CC.tokens.computeConversationMetrics(data);
-		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil });
+		const contextLimit = CC.models.contextLimitForModel(metrics.model);
+		ui.setConversationMetrics({ totalTokens: metrics.totalTokens, cachedUntil: metrics.cachedUntil, contextLimit });
 	}
 
 	function handleMessageLimit(messageLimit) {
@@ -1230,6 +1349,7 @@
 		injectStyles();
 		ui.initialize();
 		CC._ccInternal.onGenerationStart = handleGenerationStart;
+		CC._ccInternal.onGenerationEnd = refreshConversation;
 		CC._ccInternal.onConversationData = handleConversationPayload;
 		CC._ccInternal.onMessageLimit = handleMessageLimit;
 		CC._ccInternal.onUrlChange = handleUrlChange;
