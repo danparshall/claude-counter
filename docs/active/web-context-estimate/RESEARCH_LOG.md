@@ -12,6 +12,25 @@ Branched off `add-test-suite` (2026-08-17) before that branch's PR #1 merged; re
 
 ## Sessions (newest first)
 
+## Session: 2026-08-18 — [`20260818_phase_a_implementation`](convos/20260818_phase_a_implementation.md)
+
+### Topics Explored
+- Implemented the whole Phase A plan (issue #2) via TDD: RED commit (all tests first, subagent quality review), then four GREEN commits.
+- Ported Phase A into the self-contained userscript (plan's cited precedent `d9d9798` had actually left it untouched).
+- Worktree hygiene: branch moved to `.worktrees/web-context-estimate/`; main worktree restored to `main`.
+
+### Provisional Findings
+- Metrics API is now `{textTokens, mediaTokens, totalTokens, model, ...}`; `totalTokens = ⌈text×1.2⌉ + media`, calibrated once over the trunk sum.
+- Suite 47 → 78 tests, all green; CI (Node 22+24) green. PR #1 still open — no rebase yet.
+
+### Results
+- Code only: commits `8f78f29` through `1734989` on this branch.
+
+### Next Steps
+- Dan: real-app verification (plan step 16) + capture a real `model` string to replace `FIXTURE-PROVISIONAL` fixtures.
+- Phase B (issue #3): SSE/compaction instrumentation; may replace ×1.2, media heuristics, 85% threshold.
+- Candidate task: build step to generate the userscript from `src/` (hand-ported copy has no test coverage).
+
 ## Session: 2026-08-17 — [`20260817_web_context_estimate`](convos/20260817_web_context_estimate.md)
 
 ### Topics Explored
