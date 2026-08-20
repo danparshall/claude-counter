@@ -49,3 +49,7 @@ Helpers:
 - Reviewer findings (if any actionable) — apply after they return.
 - Whether to add ESLint + Prettier as a separate branch, now that CI exists.
 - The bigger refactor this safety net was built for hasn't started yet.
+
+## Captured Tasks
+
+- [#4: Follow-ups from add-test-suite review (brittleness, coverage gaps, minor refactors)](https://github.com/danparshall/claude-counter/issues/4) — captured 2026-08-20
