@@ -112,4 +112,9 @@ describe('parseUsageFromMessageLimit (SSE message_limit shape)', () => {
 		expect(parse({ windows: {} })).toBeNull();
 		expect(parse({ windows: { '5h': { utilization: 'x' } } })).toBeNull();
 	});
+
+	it('returns null when windows is an array (typeof "object", but no 5h/7d keys)', () => {
+		expect(parse({ windows: [] })).toBeNull();
+		expect(parse({ windows: [{ utilization: 0.5 }, { utilization: 0.25 }] })).toBeNull();
+	});
 });

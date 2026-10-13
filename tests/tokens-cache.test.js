@@ -6,14 +6,18 @@
 // boundary with node:crypto — the fake replaces the *other process*, never
 // the unit under test.
 //
-// Cache hits are observed behaviorally, without peeking at internal state:
-// after a first computation, the vendored tokenizer global is removed. A
-// cached message still reports its original count (no re-tokenization); an
-// uncached or changed message drops to 0 (re-tokenization attempted with the
-// tokenizer gone). The tokenizer is restored after each test.
+// Cache hits are observed at the tokenizer boundary: the vendored
+// `GPTTokenizer_o200k_base` global is wrapped in a counting pass-through
+// that delegates to the real tokenizer. A cache hit makes no tokenizer call;
+// a miss (new, changed, or evicted message) makes one. This does not depend
+// on what countTokens does when the tokenizer is *absent*, so adding a
+// fallback estimator to tokens.js would not silently break these tests.
+//
+// INVARIANT: the exact counts ("cache me if you can" -> 5, "hello world" -> 2)
+// are tied to src/vendor/o200k_base.js; re-audit if that file is refreshed.
 //
 // This file runs separately from tokens.test.js so its bridge stub and
-// tokenizer manipulation cannot leak into the no-bridge characterization.
+// tokenizer wrapper cannot leak into the no-bridge characterization.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -23,12 +27,20 @@ const CC = await loadContentScripts();
 const metrics = (conv) => CC.tokens.computeConversationMetrics(conv);
 
 const realTokenizer = globalThis.GPTTokenizer_o200k_base;
+let tokenizerCalls = 0;
 
 const workingBridge = {
 	requestHash: async (text) => ({ hash: createHash('sha256').update(text).digest('hex') })
 };
 
 beforeEach(() => {
+	tokenizerCalls = 0;
+	globalThis.GPTTokenizer_o200k_base = {
+		countTokens: (text) => {
+			tokenizerCalls += 1;
+			return realTokenizer.countTokens(text);
+		}
+	};
 	CC.bridge = workingBridge;
 });
 
@@ -37,39 +49,39 @@ afterEach(() => {
 	delete CC.bridge;
 });
 
-// "cache me if you can" -> 5 tokens (real o200k count, locked in)
-
 describe('token cache with a working hash bridge', () => {
 	it('serves an unchanged message from cache instead of re-tokenizing', async () => {
 		const conv = makeConversation([textMessage('hit-1', 'cache me if you can')], 'hit-1');
 		expect((await metrics(conv)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(1);
 
-		// Remove the tokenizer: a re-tokenization now yields 0, a cache hit keeps 5.
-		delete globalThis.GPTTokenizer_o200k_base;
 		expect((await metrics(conv)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(1); // cache hit: no second tokenization
 	});
 
 	it('re-tokenizes when a message with the same uuid changes text', async () => {
 		const before = makeConversation([textMessage('changed-1', 'cache me if you can')], 'changed-1');
 		expect((await metrics(before)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(1);
 
-		delete globalThis.GPTTokenizer_o200k_base;
 		const after = makeConversation([textMessage('changed-1', 'cache me if you can, again')], 'changed-1');
-		// Changed fingerprint forces a recount; with the tokenizer gone that recount is 0,
-		// proving the stale 5 was not served.
-		expect((await metrics(after)).totalTokens).toBe(0);
+		const m = await metrics(after);
+		expect(tokenizerCalls).toBe(2); // changed fingerprint forces a recount
+		expect(m.totalTokens).toBeGreaterThan(5); // ...and the stale 5 was not served
 	});
 
 	it('evicts messages that leave the trunk', async () => {
 		const convA = makeConversation([textMessage('evict-1', 'cache me if you can')], 'evict-1');
 		expect((await metrics(convA)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(1);
 
 		// Computing a different conversation prunes evict-1 from the cache.
 		const convB = makeConversation([textMessage('evict-2', 'hello world')], 'evict-2');
 		expect((await metrics(convB)).totalTokens).toBe(2);
+		expect(tokenizerCalls).toBe(2);
 
-		delete globalThis.GPTTokenizer_o200k_base;
-		expect((await metrics(convA)).totalTokens).toBe(0); // no longer cached
+		expect((await metrics(convA)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(3); // evicted, so counted again
 	});
 
 	it('ignores uuid-less messages entirely — they cannot join the trunk', async () => {
@@ -89,6 +101,7 @@ describe('token cache with a working hash bridge', () => {
 		const m = await metrics(conv);
 		expect(m.trunkMessageCount).toBe(1);
 		expect(m.totalTokens).toBe(2);
+		expect(tokenizerCalls).toBe(1);
 	});
 });
 
@@ -113,9 +126,7 @@ describe('token cache degradation', () => {
 		delete CC.bridge;
 		const conv = makeConversation([textMessage('direct-1', 'cache me if you can')], 'direct-1');
 		expect((await metrics(conv)).totalTokens).toBe(5);
-
-		delete globalThis.GPTTokenizer_o200k_base;
-		// No fingerprint -> no cache entry -> recount with missing tokenizer -> 0.
-		expect((await metrics(conv)).totalTokens).toBe(0);
+		expect((await metrics(conv)).totalTokens).toBe(5);
+		expect(tokenizerCalls).toBe(2); // no fingerprint -> no cache entry -> recount
 	});
 });

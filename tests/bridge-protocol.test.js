@@ -77,6 +77,14 @@ describe('request/response', () => {
 	});
 
 	it('ignores responses whose source is not this window', async () => {
+		// LOAD-BEARING DEPENDENCY: this test only exercises the production
+		// `event.source !== window` filter because the fake page side dispatches
+		// MessageEvents by hand with an explicit `source`. jsdom's own
+		// window.postMessage does not set event.source (upstream limitation);
+		// if that ever gets fixed, real postMessage replies would *also* carry
+		// `source: window`, which is fine — but if `reply()` is ever rewritten
+		// to use postMessage instead of dispatchEvent, `source: null` can no
+		// longer be injected and this test stops testing the filter.
 		onRequest((req) => {
 			reply(
 				{ cc: 'ClaudeCounter', type: 'cc:response', requestId: req.requestId, ok: true, payload: 'foreign' },
