@@ -1,3 +1,10 @@
+// Usage-payload normalizers, extracted from main.js so tests can reach them
+// without running the orchestration IIFE. Note that `CC.parsers` is therefore
+// part of the public `window.ClaudeCounter` surface; keep it if a future
+// refactor tries to shrink that namespace (tests/parsers.test.js depends on it).
+//
+// The two function bodies are mirrored verbatim in userscript/claude-counter.user.js;
+// tests/userscript-sync.test.js fails if the copies drift.
 (() => {
 	'use strict';
 

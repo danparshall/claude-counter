@@ -5,15 +5,9 @@
 // event loop, including Vitest's timers). Running the probe in a child
 // process lets the parent test kill it after a deadline instead.
 //
-// Dynamic import() (not require) so the probe works regardless of how Node
-// classifies the extension sources under the repo's "type": "module".
-//
 // Prints DONE and exits 0 if computeConversationMetrics terminates.
 
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-
-const src = (...p) => pathToFileURL(path.join(__dirname, '..', '..', 'src', ...p));
+const src = (...p) => new URL(['..', '..', 'src', ...p].join('/'), import.meta.url);
 
 const conversation = {
 	current_leaf_message_uuid: 'aaaaaaaa-0000-4000-8000-000000000001',
@@ -33,13 +27,13 @@ const conversation = {
 	]
 };
 
-(async () => {
+try {
 	await import(src('content', 'constants.js'));
 	await import(src('content', 'tokens.js'));
 	await globalThis.ClaudeCounter.tokens.computeConversationMetrics(conversation);
 	console.log('DONE');
 	process.exit(0);
-})().catch((err) => {
+} catch (err) {
 	console.error(err);
 	process.exit(1);
-});
+}

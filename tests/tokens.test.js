@@ -9,6 +9,10 @@
 //   "hello\nworld"                                  -> 3
 //   "attached content"                              -> 2
 //
+// INVARIANT: every exact count above (and the "-> 5" / "-> 2" counts in
+// tokens-cache.test.js) is tied to the vendored src/vendor/o200k_base.js.
+// If that file is ever refreshed, re-audit all exact-count assertions.
+//
 // No bridge is present in this file, so the token cache's fingerprint path is
 // inert and every message is counted directly (cache behavior is covered in
 // tokens-cache.test.js).
@@ -89,11 +93,14 @@ describe('trunk reconstruction', () => {
 	// 2s, because a regression would reintroduce a busy synchronous loop
 	// that no in-process timeout can interrupt.
 	it('terminates when the parent chain contains a cycle', () => {
-		const probe = fileURLToPath(new URL('./helpers/cycle-probe.cjs', import.meta.url));
+		const probe = fileURLToPath(new URL('./helpers/cycle-probe.mjs', import.meta.url));
 		const res = spawnSync(process.execPath, [probe], { timeout: 2000, encoding: 'utf8' });
-		expect(res.stderr).not.toMatch(/Error/); // probe loaded cleanly — not a harness crash
+		// A harness crash exits 1 (probe prints the error to stderr); a hang is
+		// killed by the timeout and exits null. Either way status !== 0, and the
+		// stderr text is attached to the failure message for diagnosis instead
+		// of being pattern-matched (Node warnings can legitimately mention "Error").
+		expect(res.status, `probe stderr:\n${res.stderr}`).toBe(0);
 		expect(res.stdout).toContain('DONE');
-		expect(res.status).toBe(0);
 	}, 10000);
 });
 
@@ -256,6 +263,39 @@ describe('cache-window math', () => {
 		const m = await metrics(conv);
 		expect(m.lastAssistantMs).toBe(Date.parse(T2));
 		expect(m.cachedUntil).toBe(Date.parse(T2) + FIVE_MIN);
+	});
+
+	it('ignores an assistant message with no created_at', async () => {
+		const conv = makeConversation(
+			[textMessage('cw-nodate', 'hello world', { sender: 'assistant' })],
+			'cw-nodate'
+		);
+		const m = await metrics(conv);
+		expect(m.lastAssistantMs).toBeNull();
+		expect(m.cachedUntil).toBeNull();
+	});
+
+	it('ignores an assistant message whose created_at does not parse', async () => {
+		const conv = makeConversation(
+			[textMessage('cw-baddate', 'hello world', { sender: 'assistant', created_at: 'not-a-date' })],
+			'cw-baddate'
+		);
+		const m = await metrics(conv);
+		expect(m.lastAssistantMs).toBeNull(); // not NaN
+		expect(m.cachedUntil).toBeNull();
+	});
+
+	it('keeps the valid timestamp when a later assistant message has an unparseable created_at', async () => {
+		const conv = makeConversation(
+			[
+				textMessage('cw-v1', 'hello world', { sender: 'assistant', created_at: T1 }),
+				textMessage('cw-v2', 'hello world', { parent: 'cw-v1', sender: 'assistant', created_at: 'garbage' })
+			],
+			'cw-v2'
+		);
+		const m = await metrics(conv);
+		expect(m.lastAssistantMs).toBe(Date.parse(T1));
+		expect(m.cachedUntil).toBe(Date.parse(T1) + FIVE_MIN);
 	});
 });
 

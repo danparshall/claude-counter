@@ -189,7 +189,7 @@
 		for (const msg of trunk) {
 			if (msg?.sender === 'assistant' && msg?.created_at) {
 				const msgMs = Date.parse(msg.created_at);
-				if (!lastAssistantMs || msgMs > lastAssistantMs) {
+				if (Number.isFinite(msgMs) && (!lastAssistantMs || msgMs > lastAssistantMs)) {
 					lastAssistantMs = msgMs;
 				}
 			}
